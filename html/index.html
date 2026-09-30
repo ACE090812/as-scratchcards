@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<!-- No external fonts or network calls on this page, on purpose. A render-blocking request to an
+     outside host (e.g. fonts.googleapis.com) has previously left an in-game NUI page as a solid
+     black screen from the moment the resource starts, with no console error, because the browser
+     texture stays opaque black until first paint - and first paint was stuck waiting on that
+     fetch. Everything below uses fonts already on the player's PC. -->
+<link rel="stylesheet" href="style.css">
+<title>Scratch &amp; Win</title>
+</head>
+<body>
+
+  <!-- #app starts hidden and ONLY script.js's 'open' NUI message ever removes the hidden class.
+       There is no default/fallback mode that shows this on load - do not remove this class in CSS
+       or give it any other default state, or the card will render full-screen for every player the
+       moment this resource starts, exactly like the as-betting black-screen bug this avoids. -->
+  <div id="app" class="hidden">
+    <div class="felt">
+      <div class="card" id="card">
+        <div class="burst"></div>
+        <div class="confetti"></div>
+
+        <div class="poster-head">
+          <div class="crest">&#10022;</div>
+          <div class="price-badge" id="card-price">&pound;1</div>
+        </div>
+
+        <div class="title-banner">
+          <div class="title-strap" id="card-strap">Instant win</div>
+          <div class="title-main" id="card-title">Lucky Sevens</div>
+        </div>
+
+        <div class="rules-box">Match 3 identical amounts in GAME 1 to win that PRIZE. Match 4 identical symbols in GAME 2 to win the BONUS shown. Top prize <b id="card-top">&pound;500</b>.</div>
+
+        <div class="games-row">
+          <div class="game-panel">
+            <div class="game-label">Game 1 &middot; Match 3</div>
+            <div class="grid" id="grid"></div>
+          </div>
+          <div class="game-panel">
+            <div class="game-label">Game 2 &middot; Match 4 Symbols</div>
+            <div class="bonus-grid" id="bonus-grid"></div>
+            <div class="bonus-result" id="bonus-result">Scratch to reveal</div>
+          </div>
+        </div>
+
+        <div class="result-bar" id="result-bar">
+          <div class="line1">Scratch Game 1 to reveal</div>
+          <div class="line2">&mdash;</div>
+        </div>
+
+        <div class="chances-ribbon" id="chances-ribbon">9 CHANCES TO WIN!</div>
+      </div>
+
+      <div class="controls">
+        <button class="action" id="reveal-btn">Reveal all</button>
+        <button class="action primary" id="close-btn" disabled>Collect &amp; close</button>
+      </div>
+      <p class="disclaimer">Every value and the win amount for both games were decided the instant you used this card - scratching only reveals what was already set.</p>
+    </div>
+  </div>
+
+  <!-- Follows the cursor while scratching, like dragging a real coin across a card. Positioned/shown
+       entirely by script.js; hidden and non-interactive otherwise. -->
+  <div id="scratch-coin" class="hidden">🪙</div>
+
+<script src="script.js"></script>
+</body>
+</html>
