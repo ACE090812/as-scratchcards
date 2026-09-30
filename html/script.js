@@ -27,7 +27,9 @@
     cardTitle: document.getElementById('card-title'),
     cardPrice: document.getElementById('card-price'),
     cardTop: document.getElementById('card-top'),
-    grid: document.getElementById('grid'),
+    game1Area: document.getElementById('game1-area'),
+    game1Label: document.getElementById('game1-label'),
+    cardRules: document.getElementById('card-rules'),
     bonusGrid: document.getElementById('bonus-grid'),
     bonusResult: document.getElementById('bonus-result'),
     chancesRibbon: document.getElementById('chances-ribbon'),
@@ -228,6 +230,8 @@
         playScratchTick();
       },
       check: checkCleared,
+      markDone: function () { done = true; }, // used by the "Reveal all" button, which reveals
+                                              // instantly without actually scratching the canvas.
     };
     activateGlobalScratchDrag();
 
@@ -295,9 +299,8 @@
   }
 
   function maybeFinish() {
-    var g1Done = state.cellObjs.every(function (c) { return c.el.classList.contains('done'); });
     var g2Done = state.bonusObjs.every(function (c) { return c.el.classList.contains('done'); });
-    if (!g1Done || !g2Done) return;
+    if (!state.game1Done || !g2Done) return;
     els.revealBtn.disabled = true;
     els.closeBtn.disabled = false;
 
@@ -313,24 +316,282 @@
 
   function fadeOutCanvas(cellObj) {
     var canvas = cellObj.el.querySelector('canvas');
-    if (canvas) canvas.classList.add('clearing');
+    if (canvas) {
+      canvas.classList.add('clearing');
+      if (canvas.__scratch) canvas.__scratch.markDone();
+    }
   }
 
-  function revealMain(cellObj) {
-    if (cellObj.el.classList.contains('done')) return;
-    fadeOutCanvas(cellObj);
-    cellObj.el.classList.add('done');
+  // ---- generic cell helper used by every Game 1 renderer below --------------------------------
+  function mkCell(innerHtml, extraClass) {
+    var el = document.createElement('div');
+    el.className = extraClass ? ('cell ' + extraClass) : 'cell';
+    var v = document.createElement('div');
+    v.className = 'value';
+    v.innerHTML = innerHtml;
+    el.appendChild(v);
+    var canvas = scratchCanvas(el); // appends itself to el
+    return { el: el, canvas: canvas };
+  }
 
-    var win = state.result.win || 0;
-    if (win > 0) {
-      var winners = state.cellObjs.filter(function (c) { return c.value === win; });
-      var revealedWinners = winners.filter(function (c) { return c.el.classList.contains('done'); });
-      if (revealedWinners.length === 3) {
-        winners.forEach(function (c) { c.el.classList.add('matched'); });
-      }
-    }
+  function finishGame1() {
+    state.game1Done = true;
     maybeFinish();
   }
+
+  // Each renderer below owns exactly one `game`'s worth of Game 1 layout/logic: it builds the DOM
+  // into `area`, wires every cell's reveal into its own `objs` list, and calls `finishGame1()` once
+  // every cell it created is done - applying whatever "matched" highlighting makes sense for that
+  // game first. The server has already decided the win amount for all of them; these renderers only
+  // ever decide how to VISUALLY highlight what already won, never whether anything won.
+  var GAME1_RENDERERS = {
+    classic: function (tier, result, area) {
+      area.innerHTML = '<div class="grid" id="g1-grid"></div>';
+      var gridEl = area.querySelector('#g1-grid');
+      var objs = [];
+      result.game1.cells.forEach(function (value) {
+        var cell = mkCell(fmt(tier, value));
+        gridEl.appendChild(cell.el);
+        var o = { el: cell.el, value: value };
+        objs.push(o);
+        cell.canvas.onRevealed = function () { reveal(o); };
+      });
+      function reveal(o) {
+        if (o.el.classList.contains('done')) return;
+        fadeOutCanvas(o);
+        o.el.classList.add('done');
+        var win = result.win || 0;
+        if (win > 0) {
+          var winners = objs.filter(function (c) { return c.value === win; });
+          if (winners.filter(function (c) { return c.el.classList.contains('done'); }).length === 3) {
+            winners.forEach(function (c) { c.el.classList.add('matched'); });
+          }
+        }
+        if (objs.every(function (c) { return c.el.classList.contains('done'); })) finishGame1();
+      }
+      state.game1Objs = objs;
+      state.game1Reveal = reveal;
+    },
+
+    star: function (tier, result, area) {
+      area.innerHTML = '<div class="grid4" id="g1-grid"></div>';
+      var gridEl = area.querySelector('#g1-grid');
+      var objs = [];
+      result.game1.panels.forEach(function (icon, i) {
+        var cell = mkCell('<span style="font-size:20px;">' + icon + '</span>');
+        gridEl.appendChild(cell.el);
+        var o = { el: cell.el, icon: icon, index: i + 1 };
+        objs.push(o);
+        cell.canvas.onRevealed = function () { reveal(o); };
+      });
+      function reveal(o) {
+        if (o.el.classList.contains('done')) return;
+        fadeOutCanvas(o);
+        o.el.classList.add('done');
+        if (result.game1.starIndex === o.index && o.el.classList.contains('done')) {
+          o.el.classList.add('matched');
+        }
+        if (objs.every(function (c) { return c.el.classList.contains('done'); })) finishGame1();
+      }
+      state.game1Objs = objs;
+      state.game1Reveal = reveal;
+    },
+
+    banker: function (tier, result, area) {
+      area.innerHTML =
+        '<div class="row-vs">' +
+        '<div class="subgroup"><div class="subgroup-label">Your numbers</div><div class="grid3" id="g1-yours"></div></div>' +
+        '<div class="vs-label">VS</div>' +
+        '<div class="subgroup"><div class="subgroup-label">The banker</div><div class="grid3" id="g1-banker"></div></div>' +
+        '</div>';
+      var yoursEl = area.querySelector('#g1-yours'), bankerEl = area.querySelector('#g1-banker');
+      var objs = [];
+      var bankerObj;
+      result.game1.yourNumbers.forEach(function (value) {
+        var cell = mkCell(String(value));
+        yoursEl.appendChild(cell.el);
+        var o = { el: cell.el, value: value, kind: 'yours' };
+        objs.push(o);
+        cell.canvas.onRevealed = function () { reveal(o); };
+      });
+      (function () {
+        var cell = mkCell(String(result.game1.bankerNumber));
+        bankerEl.appendChild(cell.el);
+        bankerObj = { el: cell.el, value: result.game1.bankerNumber, kind: 'banker' };
+        objs.push(bankerObj);
+        cell.canvas.onRevealed = function () { reveal(bankerObj); };
+      })();
+      function reveal(o) {
+        if (o.el.classList.contains('done')) return;
+        fadeOutCanvas(o);
+        o.el.classList.add('done');
+        if (objs.every(function (c) { return c.el.classList.contains('done'); })) {
+          if (result.win > 0) {
+            objs.forEach(function (c) {
+              if (c.kind === 'yours' && c.value > bankerObj.value) c.el.classList.add('matched');
+              if (c.kind === 'banker') c.el.classList.add('matched');
+            });
+          }
+          finishGame1();
+        }
+      }
+      state.game1Objs = objs;
+      state.game1Reveal = reveal;
+    },
+
+    multiplier: function (tier, result, area) {
+      area.innerHTML = '<div class="grid" id="g1-grid"></div><div class="mult-badge">Multiplier</div><div class="mult-cell" id="g1-mult"></div>';
+      var gridEl = area.querySelector('#g1-grid'), multEl = area.querySelector('#g1-mult');
+      var objs = [];
+      result.game1.cells.forEach(function (value) {
+        var cell = mkCell(fmt(tier, value));
+        gridEl.appendChild(cell.el);
+        var o = { el: cell.el, value: value, kind: 'cell' };
+        objs.push(o);
+        cell.canvas.onRevealed = function () { reveal(o); };
+      });
+      var multCell = mkCell('x' + result.game1.multiplier);
+      multEl.appendChild(multCell.el);
+      var multObj = { el: multCell.el, kind: 'mult' };
+      objs.push(multObj);
+      multCell.canvas.onRevealed = function () { reveal(multObj); };
+
+      function reveal(o) {
+        if (o.el.classList.contains('done')) return;
+        fadeOutCanvas(o);
+        o.el.classList.add('done');
+        if (objs.every(function (c) { return c.el.classList.contains('done'); })) {
+          if (result.win > 0) {
+            var baseWinValue = objs.filter(function (c) { return c.kind === 'cell'; })
+              .reduce(function (best, c) {
+                return objs.filter(function (x) { return x.kind === 'cell' && x.value === c.value; }).length >= 3 ? c.value : best;
+              }, 0);
+            objs.forEach(function (c) {
+              if (c.kind === 'cell' && c.value === baseWinValue) c.el.classList.add('matched');
+              if (c.kind === 'mult') c.el.classList.add('matched');
+            });
+          }
+          finishGame1();
+        }
+      }
+      state.game1Objs = objs;
+      state.game1Reveal = reveal;
+    },
+
+    numbers: function (tier, result, area) {
+      area.innerHTML =
+        '<div class="subgroup-label">Winning numbers</div><div class="grid5" id="g1-win"></div>' +
+        '<div class="subgroup-label" style="margin-top:8px;">Your numbers</div><div class="grid5" id="g1-your"></div>';
+      var winEl = area.querySelector('#g1-win'), yourEl = area.querySelector('#g1-your');
+      var objs = [], winningObjs = [], yourObjs = [];
+      result.game1.winningNumbers.forEach(function (value) {
+        var cell = mkCell(String(value));
+        winEl.appendChild(cell.el);
+        var o = { el: cell.el, value: value };
+        objs.push(o); winningObjs.push(o);
+        cell.canvas.onRevealed = function () { reveal(o); };
+      });
+      result.game1.yourNumbers.forEach(function (value) {
+        var cell = mkCell(String(value));
+        yourEl.appendChild(cell.el);
+        var o = { el: cell.el, value: value };
+        objs.push(o); yourObjs.push(o);
+        cell.canvas.onRevealed = function () { reveal(o); };
+      });
+      function reveal(o) {
+        if (o.el.classList.contains('done')) return;
+        fadeOutCanvas(o);
+        o.el.classList.add('done');
+        if (objs.every(function (c) { return c.el.classList.contains('done'); })) {
+          var calledSet = {};
+          winningObjs.forEach(function (c) { calledSet[c.value] = true; });
+          yourObjs.forEach(function (c) { if (calledSet[c.value]) c.el.classList.add('matched'); });
+          finishGame1();
+        }
+      }
+      state.game1Objs = objs;
+      state.game1Reveal = reveal;
+    },
+
+    bingo: function (tier, result, area) {
+      var rowLabels = ['ROW1 = £2', 'ROW2 = £5', 'ROW3 = £10', 'ROW4 = £20', 'ROW5 = £50'];
+      area.innerHTML =
+        '<div class="game-label" style="margin-bottom:5px;">Scratch here first - Caller\'s numbers</div><div class="grid5 caller-row" id="g1-caller"></div>' +
+        '<div class="gem-banner">Lines with a &#9830; pay double!</div>' +
+        '<div class="game-label">Your Bingo Card</div><div class="bingo-wrap" id="g1-grid"></div>';
+      var callerEl = area.querySelector('#g1-caller'), gridEl = area.querySelector('#g1-grid');
+      var objs = [], callerObjs = [], gridObjs = [];
+
+      result.game1.caller.forEach(function (value) {
+        var cell = mkCell(String(value), 'ball');
+        callerEl.appendChild(cell.el);
+        var o = { el: cell.el, value: value };
+        objs.push(o); callerObjs.push(o);
+        cell.canvas.onRevealed = function () { reveal(o); };
+      });
+
+      for (var row = 0; row < 5; row++) {
+        var rowEl = document.createElement('div');
+        rowEl.className = 'bingo-row';
+        var label = document.createElement('div');
+        label.className = 'row-label';
+        label.textContent = rowLabels[row];
+        rowEl.appendChild(label);
+        var cellsWrap = document.createElement('div');
+        cellsWrap.className = 'bingo-cells';
+        for (var col = 0; col < 5; col++) {
+          var idx = row * 5 + col + 1; // 1-indexed to match server/main.lua's grid layout
+          var isGem = idx === result.game1.gemIndex;
+          if (result.game1.grid[idx] === 'FREE') {
+            var freeCell = mkCell('<span class="gem">&#9830;</span>', 'free');
+            freeCell.el.classList.add('done', 'matched');
+            if (freeCell.canvas.__scratch) freeCell.canvas.__scratch.markDone();
+            cellsWrap.appendChild(freeCell.el);
+          } else {
+            var value = result.game1.grid[idx];
+            var cell = mkCell(isGem ? (String(value) + '<span class="gem-mark">&#9830;</span>') : String(value));
+            cellsWrap.appendChild(cell.el);
+            var o = { el: cell.el, value: value };
+            objs.push(o); gridObjs.push(o);
+            (function (o) { cell.canvas.onRevealed = function () { reveal(o); }; })(o);
+          }
+        }
+        rowEl.appendChild(cellsWrap);
+        gridEl.appendChild(rowEl);
+      }
+
+      function reveal(o) {
+        if (o.el.classList.contains('done')) return;
+        fadeOutCanvas(o);
+        o.el.classList.add('done');
+        if (objs.every(function (c) { return c.el.classList.contains('done'); })) {
+          var calledSet = {};
+          callerObjs.forEach(function (c) { calledSet[c.value] = true; });
+          gridObjs.forEach(function (c) { if (calledSet[c.value]) c.el.classList.add('matched'); });
+          finishGame1();
+        }
+      }
+      state.game1Objs = objs;
+      state.game1Reveal = reveal;
+    },
+  };
+
+  var GAME1_LABELS = {
+    classic: 'Game 1 &middot; Match 3',
+    star: 'Game 1 &middot; Find The Star',
+    banker: 'Game 1 &middot; Beat The Banker',
+    multiplier: 'Game 1 &middot; Cash Multiplier',
+    numbers: 'Game 1 &middot; Match Your Numbers',
+    bingo: 'Game 1 &middot; Jewel Bingo',
+  };
+  var GAME1_RULES = {
+    classic: 'Match 3 identical amounts in GAME 1 to win that PRIZE. Match 4 identical symbols in GAME 2 to win the BONUS shown. Top prize <b id="card-top"></b>.',
+    star: 'Find the single &#11088; among the 8 panels in GAME 1 to win the prize it\'s hiding. Match 4 identical symbols in GAME 2 to win the BONUS shown. Top prize <b id="card-top"></b>.',
+    banker: 'Beat the banker\'s number with any of your 3 numbers in GAME 1 to win. Match 4 identical symbols in GAME 2 to win the BONUS shown. Top prize <b id="card-top"></b>.',
+    multiplier: 'Match 3 identical amounts in GAME 1, then multiply it by whatever the multiplier panel reveals. Match 4 identical symbols in GAME 2 to win the BONUS shown. Top prize <b id="card-top"></b>.',
+    numbers: 'Scratch your 20 numbers against the 10 winning numbers in GAME 1 - the more matches, the bigger the prize. Match 4 identical symbols in GAME 2 to win the BONUS shown. Top prize <b id="card-top"></b>.',
+    bingo: 'Scratch the caller\'s numbers, then your Bingo Card in GAME 1 - complete a row, column or diagonal for the prize alongside it (lines through the &#9830; pay double). Match 4 identical symbols in GAME 2 to win the BONUS shown. Top prize <b id="card-top"></b>.',
+  };
 
   function revealBonus(cellObj) {
     if (cellObj.el.classList.contains('done')) return;
@@ -352,30 +613,27 @@
   }
 
   function buildUi(tier, result) {
-    state = { tier: tier, result: result, cellObjs: [], bonusObjs: [] };
+    state = { tier: tier, result: result, game1Done: false, game1Objs: [], game1Reveal: null, bonusObjs: [] };
+
+    var game = result.game || 'classic';
 
     els.card.setAttribute('data-tier', tier.id);
     els.cardStrap.textContent = tier.strap;
     els.cardTitle.textContent = tier.name;
     els.cardPrice.textContent = tier.symbol + tier.price;
-    els.cardTop.textContent = fmt(tier, tier.top);
     els.chancesRibbon.textContent = (9 + Math.round(tier.price)) + ' CHANCES TO WIN!';
+    els.game1Label.innerHTML = GAME1_LABELS[game] || GAME1_LABELS.classic;
+    // Replaces the rules box's whole innerHTML (including the <b id="card-top"> placeholder inside
+    // it), so the cached els.cardTop reference from page load now points at a detached node - refetch
+    // it before setting the top-prize text or it'd silently write to an element nobody can see.
+    els.cardRules.innerHTML = GAME1_RULES[game] || GAME1_RULES.classic;
+    els.cardTop = document.getElementById('card-top');
+    els.cardTop.textContent = fmt(tier, tier.top);
     document.body.style.setProperty('--tier-color', tier.color);
 
-    els.grid.innerHTML = '';
-    result.cells.forEach(function (value) {
-      var cell = document.createElement('div');
-      cell.className = 'cell';
-      var valueEl = document.createElement('div');
-      valueEl.className = 'value';
-      valueEl.textContent = fmt(tier, value);
-      cell.appendChild(valueEl);
-      els.grid.appendChild(cell);
-      var cellObj = { el: cell, value: value };
-      var canvas = scratchCanvas(cell); // appends itself to cell
-      canvas.onRevealed = function () { revealMain(cellObj); };
-      state.cellObjs.push(cellObj);
-    });
+    els.game1Area.innerHTML = '';
+    var renderer = GAME1_RENDERERS[game] || GAME1_RENDERERS.classic;
+    renderer(tier, result, els.game1Area);
 
     els.bonusGrid.innerHTML = '';
     els.bonusResult.className = 'bonus-result';
@@ -402,7 +660,7 @@
 
   els.revealBtn.addEventListener('click', function () {
     if (!state) return;
-    state.cellObjs.forEach(revealMain);
+    (state.game1Objs || []).forEach(function (o) { if (state.game1Reveal) state.game1Reveal(o); });
     state.bonusObjs.forEach(revealBonus);
   });
 

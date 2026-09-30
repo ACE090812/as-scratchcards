@@ -2,8 +2,30 @@
 
 Item-based instant-win scratchcards, branded as "Los Santos Lottery" (see `branding/`).
 Server-authoritative RNG, framework-agnostic payout (qbox / qb-core / ESX auto-detected),
-ox_inventory or qb-inventory (auto-detected), real drag-to-scratch UI with a synthesized scratch
-sound, a soft daily payout cap, an oxmysql audit log, and a Discord webhook on every win.
+ox_inventory or qb-inventory (auto-detected), real drag-to-scratch UI (one continuous swipe can
+scratch straight across several panels, like a real card - it's not locked to one square at a
+time) with a synthesized scratch sound, a soft daily payout cap, an oxmysql audit log, and a
+Discord webhook on every win.
+
+Ten cards ship out of the box across six different Game 1 mechanics - not just the same match-3
+recoloured ten times:
+
+| Item | Card | Game 1 | Price | Top prize |
+| --- | --- | --- | --- | --- |
+| `scratchcard_1` | Lucky Sevens | Classic match 3 | £1 | £500 |
+| `scratchcard_2` | Cash Cascade | Classic match 3 | £2 | £2,000 |
+| `scratchcard_3` | Silver Spinner | Classic match 3 | £3 | £5,000 |
+| `scratchcard_4` | Diamond Sevens | Classic match 3 | £5 | £20,000 |
+| `scratchcard_5` | Emerald Millions | Classic match 3 | £10 | £250,000 |
+| `scratchcard_star` | Find The Star | Find the ⭐ among 8 panels | £2 | £5,000 |
+| `scratchcard_banker` | Beat The Banker | Your 3 numbers vs. the banker's 1 | £3 | £10,000 |
+| `scratchcard_multiplier` | Cash Multiplier | Match 3, then multiply the win | £5 | £50,000 |
+| `scratchcard_numbers` | Match Your Numbers | 20 of yours vs. 10 winning numbers | £3 | £15,000 |
+| `scratchcard_bingo` | Jewel Bingo | 5x5 grid, complete a row/column/diagonal | £3 | £300,000 |
+
+Every tier still gets the same Game 2 bonus panel (match 4 identical symbols) regardless of which
+Game 1 mechanic it uses. Add, remove, or reprice any of these in `config.lua` - see the `game`
+field comment at the top of `Config.Tiers` for how each mechanic is configured.
 
 ## Install
 
@@ -21,6 +43,11 @@ sound, a soft daily payout cap, an oxmysql audit log, and a Discord webhook on e
 ['scratchcard_3'] = { label = 'Silver Spinner Scratchcard (£3)', weight = 1, stack = true, close = true, client = { export = 'as-scratchcard.scratchcard_3' } },
 ['scratchcard_4'] = { label = 'Diamond Sevens Scratchcard (£5)', weight = 1, stack = true, close = true, client = { export = 'as-scratchcard.scratchcard_4' } },
 ['scratchcard_5'] = { label = 'Emerald Millions Scratchcard (£10)', weight = 1, stack = true, close = true, client = { export = 'as-scratchcard.scratchcard_5' } },
+['scratchcard_star'] = { label = 'Find The Star Scratchcard (£2)', weight = 1, stack = true, close = true, client = { export = 'as-scratchcard.scratchcard_star' } },
+['scratchcard_banker'] = { label = 'Beat The Banker Scratchcard (£3)', weight = 1, stack = true, close = true, client = { export = 'as-scratchcard.scratchcard_banker' } },
+['scratchcard_multiplier'] = { label = 'Cash Multiplier Scratchcard (£5)', weight = 1, stack = true, close = true, client = { export = 'as-scratchcard.scratchcard_multiplier' } },
+['scratchcard_numbers'] = { label = 'Match Your Numbers Scratchcard (£3)', weight = 1, stack = true, close = true, client = { export = 'as-scratchcard.scratchcard_numbers' } },
+['scratchcard_bingo'] = { label = 'Jewel Bingo Scratchcard (£3)', weight = 1, stack = true, close = true, client = { export = 'as-scratchcard.scratchcard_bingo' } },
 ```
 
    If you renamed this resource's folder to something other than `as-scratchcard`, change the
@@ -31,7 +58,8 @@ sound, a soft daily payout cap, an oxmysql audit log, and a Discord webhook on e
 
 ```lua
 ['scratchcard_1'] = { name = 'scratchcard_1', label = 'Lucky Sevens Scratchcard (£1)', weight = 100, type = 'item', image = 'scratchcard_1.png', unique = false, useable = true, shouldClose = true, combinable = nil, description = 'A £1 Lucky Sevens scratchcard.' },
--- ...and so on for scratchcard_2 through scratchcard_5
+-- ...and so on for every item in the table above (scratchcard_2 through scratchcard_5, plus
+-- scratchcard_star, scratchcard_banker, scratchcard_multiplier, scratchcard_numbers, scratchcard_bingo)
 ```
 
    `close`/`shouldClose = true` closes the player's inventory when the item is used, since using one
@@ -68,8 +96,11 @@ sound, a soft daily payout cap, an oxmysql audit log, and a Discord webhook on e
   server (`server/main.lua`) is what rolls the full outcome for both games and stores it keyed to
   that player — nothing about win/lose is ever decided or trusted client-side.
 - The client (`client/main.lua`) opens the NUI with that result and focuses it.
-- The player scratches Game 1 (3x3 match-3) and Game 2 (match 4 symbols) — this is just revealing
-  values that were already fixed, not generating them.
+- The player scratches Game 1 (whichever mechanic this tier's `game` type uses - see the table
+  above) and Game 2 (match 4 symbols) — this is just revealing values that were already fixed, not
+  generating them. `html/script.js`'s `GAME1_RENDERERS` table has one renderer per `game` type; add
+  a new one there (plus a matching builder in `server/main.lua`'s `Games` table) to add another
+  mechanic of your own.
 - Once both games are fully scratched, "Collect & close" tells the server to pay out via
   `server/bridge.lua` (qbox / qb-core / ESX) and closes the NUI. Pressing Escape before finishing
   forfeits that card — the server discards the pending result rather than re-rolling it later.
